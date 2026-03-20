@@ -1,19 +1,24 @@
-from fastapi import FastAPI
-from app.models import Ticket
-from app.classifier import classify_ticket
-from app.router import route_channel
-from app.db import log_ticket
+"""
+FastAPI application entry point.
 
-app = FastAPI()
+Wires together configuration, logging, and route registration.
+No business logic lives here.
+"""
 
-@app.post("/support-ticket/")
-def receive_ticket(ticket: Ticket):
-    classified = classify_ticket(ticket.subject, ticket.body)
-    channel = route_channel(classified.category)
+from app.config import settings
+from app.core.logging import setup_logging
 
-    log_ticket(classified.dict())
+setup_logging(settings.log_level)
 
-    return {
-        "routed_to": channel,
-        "classification": classified
-    }
+from fastapi import FastAPI  # noqa: E402 — import after logging is configured
+
+from app.routes import health, tickets  # noqa: E402
+
+app = FastAPI(
+    title="Support Ticket Routing",
+    description="Automated support ticket classification, routing, and audit logging.",
+    version="1.0.0",
+)
+
+app.include_router(health.router)
+app.include_router(tickets.router)
