@@ -1,43 +1,69 @@
 """
 Ticket routing service.
 
-Maps classified ticket categories to support channels.
-The routing table lives here — no routing logic elsewhere in the app.
+Routes a classified ticket to the appropriate queue based on three signals
+evaluated in priority order:
+
+  1. Confidence — low confidence goes to manual review regardless of category.
+  2. Urgency   — high urgency escalates regardless of category.
+  3. Category  — determines the team queue for normal-confidence/urgency tickets.
+
+Available queues: escalation | manual_review | finance | support | general
 """
 
 import logging
 
-from app.config import settings
+from app.schemas.ticket import ClassificationResult, RoutingDecision
 
 logger = logging.getLogger(__name__)
 
-_ROUTING_TABLE: dict[str, str] = {
-    "bug": "#support-bugs",
-    "feature_request": "#support-features",
-    "billing": "#support-billing",
-    "technical_question": "#support-tech",
-}
+# Confidence below this threshold means we're not certain enough to auto-route.
+CONFIDENCE_MANUAL_REVIEW_THRESHOLD = 0.60
 
 
-def route(category: str) -> str:
+def route(classification: ClassificationResult) -> RoutingDecision:
     """
-    Determine the support channel for a given ticket category.
+    Determine the queue and routing reason for a classified ticket.
 
     Args:
-        category: Classified ticket category string.
+        classification: Output of classification + confidence scoring.
 
     Returns:
-        Channel name (e.g. '#support-bugs'). Falls back to the
-        configured default channel for unknown categories.
+        RoutingDecision with target queue and human-readable reason.
     """
-    channel = _ROUTING_TABLE.get(category, settings.default_channel)
+    # 1. Low confidence → manual review (we can't trust the category).
+    if classification.confidence < CONFIDENCE_MANUAL_REVIEW_THRESHOLD:
+        decision = RoutingDecision(
+            queue="manual_review",
+            reason=f"Confidence too low for auto-routing ({classification.confidence:.2f})",
+        )
+
+    # 2. High urgency → escalation (time-sensitive, needs immediate attention).
+    elif classification.urgency == "high":
+        decision = RoutingDecision(
+            queue="escalation",
+            reason="High urgency — requires immediate attention",
+        )
+
+    # 3. Category-based routing.
+    elif classification.category == "billing":
+        decision = RoutingDecision(queue="finance", reason="Billing or payment inquiry")
+
+    elif classification.category == "technical":
+        decision = RoutingDecision(queue="support", reason="Technical support request")
+
+    else:
+        decision = RoutingDecision(queue="general", reason="General inquiry")
 
     logger.info(
         "Ticket routed",
         extra={
-            "category": category,
-            "channel": channel,
+            "queue": decision.queue,
+            "reason": decision.reason,
+            "category": classification.category,
+            "urgency": classification.urgency,
+            "confidence": classification.confidence,
         },
     )
 
-    return channel
+    return decision
