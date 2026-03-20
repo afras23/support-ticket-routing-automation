@@ -1,8 +1,8 @@
 """
 Audit service.
 
-Owns the database engine and session factory. Persists ticket processing
-records and provides the get_db dependency for FastAPI routes.
+Owns the database engine and session factory. Persists the full pipeline
+result for every processed ticket.
 
 All database access goes through this module — no raw SQL or session
 creation anywhere else in the application.
@@ -17,7 +17,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import settings
 from app.models.ticket import Base, TicketLog
-from app.schemas.ticket import ClassifiedTicket
+from app.schemas.ticket import AutomationResult, ClassificationResult, RoutingDecision, TicketRequest
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +53,36 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def log_ticket(
-    classified: ClassifiedTicket,
-    routed_to: str,
+    ticket: TicketRequest,
+    classification: ClassificationResult,
+    routing: RoutingDecision,
+    automation: AutomationResult,
     db: Session,
 ) -> TicketLog:
     """
-    Persist a classified ticket to the audit log.
+    Persist the full pipeline result to the audit log.
 
     Args:
-        classified: Classification result.
-        routed_to: Channel the ticket was routed to.
+        ticket: Original inbound request.
+        classification: Classification + scored confidence.
+        routing: Routing decision (queue + reason).
+        automation: Auto-resolution outcome.
         db: Active database session.
 
     Returns:
         The persisted TicketLog record (with id populated).
     """
     entry = TicketLog(
-        category=classified.category,
-        urgency=classified.urgency,
-        sentiment=classified.sentiment,
-        product_area=classified.product_area,
-        confidence=classified.confidence,
-        summary=classified.summary,
-        routed_to=routed_to,
+        subject=ticket.subject,
+        body=ticket.body,
+        customer_email=ticket.customer_email,
+        category=classification.category,
+        urgency=classification.urgency,
+        confidence=classification.confidence,
+        routing_queue=routing.queue,
+        routing_reason=routing.reason,
+        automation_resolved=automation.resolved,
+        automation_reason=automation.reason,
     )
     db.add(entry)
     db.commit()
@@ -86,7 +93,8 @@ def log_ticket(
         extra={
             "ticket_id": entry.id,
             "category": entry.category,
-            "routed_to": routed_to,
+            "queue": entry.routing_queue,
+            "resolved": entry.automation_resolved,
         },
     )
 

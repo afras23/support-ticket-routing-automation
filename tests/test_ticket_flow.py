@@ -1,37 +1,16 @@
 """
-Tests for the ticket processing pipeline.
+API endpoint smoke tests.
 
-Covers the API endpoint, classification service, and routing service in
-isolation so failures can be pinpointed quickly.
+Covers the happy path for each routing outcome and validates that
+the response structure matches the PipelineResult schema. Input
+validation error cases are also covered here.
 """
 
-import pytest
 from fastapi.testclient import TestClient
-
-from app.services import classification, routing
-
-
-# ---------------------------------------------------------------------------
-# API endpoint tests
-# ---------------------------------------------------------------------------
 
 
 class TestTicketEndpoint:
-    def test_bug_ticket_routes_to_bugs_channel(self, client: TestClient) -> None:
-        response = client.post(
-            "/support-ticket/",
-            json={
-                "subject": "App crashes on login",
-                "body": "I get an error every time I try to log in. The app crashes immediately.",
-                "customer_email": "user@example.com",
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["routed_to"] == "#support-bugs"
-        assert data["classification"]["category"] == "bug"
-
-    def test_billing_ticket_routes_to_billing_channel(self, client: TestClient) -> None:
+    def test_billing_ticket_routes_to_finance(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
             json={
@@ -42,77 +21,92 @@ class TestTicketEndpoint:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["routed_to"] == "#support-billing"
         assert data["classification"]["category"] == "billing"
+        assert data["routing"]["queue"] == "finance"
 
-    def test_feature_request_routes_to_features_channel(self, client: TestClient) -> None:
+    def test_technical_ticket_routes_to_support(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
             json={
-                "subject": "Feature request: dark mode",
-                "body": "I would like to request a dark mode feature for the app.",
+                "subject": "Cannot connect to API",
+                "body": "The API integration keeps failing with a connection error.",
                 "customer_email": "user@example.com",
             },
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["routed_to"] == "#support-features"
-        assert data["classification"]["category"] == "feature_request"
+        assert data["classification"]["category"] == "technical"
+        assert data["routing"]["queue"] == "support"
 
-    def test_general_question_routes_to_tech_channel(self, client: TestClient) -> None:
+    def test_high_urgency_routes_to_escalation(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
             json={
-                "subject": "How do I configure SSO?",
-                "body": "I need help setting up single sign-on for my organisation.",
+                "subject": "URGENT: payment system down",
+                "body": "Our payment system is down and we are losing revenue. This is critical.",
                 "customer_email": "user@example.com",
             },
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["classification"]["category"] == "technical_question"
-        assert data["routed_to"] == "#support-tech"
+        assert data["classification"]["urgency"] == "high"
+        assert data["routing"]["queue"] == "escalation"
 
-    def test_urgent_ticket_has_high_urgency(self, client: TestClient) -> None:
+    def test_general_ticket_routes_to_general_queue(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
             json={
-                "subject": "URGENT: payment not working",
-                "body": "This is urgent — our payment integration is broken and orders are failing.",
+                "subject": "General inquiry",
+                "body": "I am wondering about your pricing plans and what features are included.",
                 "customer_email": "user@example.com",
             },
         )
         assert response.status_code == 200
-        assert response.json()["classification"]["urgency"] == "high"
+        data = response.json()
+        assert data["classification"]["category"] == "general"
+        # Should not be escalated unless urgency is high
+        assert data["routing"]["queue"] in {"general", "manual_review"}
 
-    def test_negative_sentiment_detected(self, client: TestClient) -> None:
+    def test_response_has_complete_pipeline_shape(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
             json={
-                "subject": "Very frustrated with the service",
-                "body": "I am angry and frustrated. This is terrible and unacceptable.",
-                "customer_email": "user@example.com",
-            },
-        )
-        assert response.status_code == 200
-        assert response.json()["classification"]["sentiment"] == "negative"
-
-    def test_response_includes_classification_fields(self, client: TestClient) -> None:
-        response = client.post(
-            "/support-ticket/",
-            json={
-                "subject": "Test ticket",
-                "body": "This is a test ticket body.",
+                "subject": "Test",
+                "body": "This is a test ticket body with enough content.",
                 "customer_email": "test@example.com",
             },
         )
         assert response.status_code == 200
-        classification_data = response.json()["classification"]
-        assert "category" in classification_data
-        assert "urgency" in classification_data
-        assert "sentiment" in classification_data
-        assert "confidence" in classification_data
-        assert "summary" in classification_data
+        data = response.json()
+        assert "ticket_id" in data
+        assert "classification" in data
+        assert "routing" in data
+        assert "automation" in data
+
+        clf = data["classification"]
+        assert "category" in clf
+        assert "urgency" in clf
+        assert "confidence" in clf
+
+        rte = data["routing"]
+        assert "queue" in rte
+        assert "reason" in rte
+
+        aut = data["automation"]
+        assert "resolved" in aut
+        assert "reason" in aut
+
+    def test_ticket_id_is_integer(self, client: TestClient) -> None:
+        response = client.post(
+            "/support-ticket/",
+            json={
+                "subject": "Test",
+                "body": "A simple test ticket.",
+                "customer_email": "test@example.com",
+            },
+        )
+        assert response.status_code == 200
+        assert isinstance(response.json()["ticket_id"], int)
 
     def test_missing_customer_email_returns_422(self, client: TestClient) -> None:
         response = client.post(
@@ -134,85 +128,3 @@ class TestTicketEndpoint:
             json={"subject": "Test subject", "body": "", "customer_email": "user@example.com"},
         )
         assert response.status_code == 422
-
-
-# ---------------------------------------------------------------------------
-# Classification service unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestClassificationService:
-    def test_bug_keywords_detected(self) -> None:
-        result = classification.classify("app crash", "The system has an error and crashed.")
-        assert result.category == "bug"
-
-    def test_billing_keywords_detected(self) -> None:
-        result = classification.classify("billing issue", "My invoice shows the wrong amount.")
-        assert result.category == "billing"
-
-    def test_feature_request_keywords_detected(self) -> None:
-        result = classification.classify("feature request", "Please add dark mode to the app.")
-        assert result.category == "feature_request"
-
-    def test_fallback_to_technical_question(self) -> None:
-        result = classification.classify("general", "How does the system work?")
-        assert result.category == "technical_question"
-
-    def test_urgency_high_on_urgent_keyword(self) -> None:
-        result = classification.classify("urgent issue", "This is critical — fix it asap.")
-        assert result.urgency == "high"
-
-    def test_urgency_medium_by_default(self) -> None:
-        result = classification.classify("question", "I have a question about the product.")
-        assert result.urgency == "medium"
-
-    def test_negative_sentiment_detected(self) -> None:
-        result = classification.classify("problem", "I am frustrated and angry about this.")
-        assert result.sentiment == "negative"
-
-    def test_positive_sentiment_detected(self) -> None:
-        result = classification.classify("feedback", "Great product, I love it, thanks!")
-        assert result.sentiment == "positive"
-
-    def test_neutral_sentiment_by_default(self) -> None:
-        result = classification.classify("question", "How do I reset my password?")
-        assert result.sentiment == "neutral"
-
-    def test_long_body_summary_truncated(self) -> None:
-        long_body = "word " * 60  # well over 180 chars
-        result = classification.classify("subject", long_body)
-        assert result.summary.endswith("...")
-        assert len(result.summary) <= 183  # 180 chars + "..."
-
-    def test_short_body_summary_not_truncated(self) -> None:
-        short_body = "Short body."
-        result = classification.classify("subject", short_body)
-        assert result.summary == short_body
-        assert not result.summary.endswith("...")
-
-    def test_confidence_within_valid_range(self) -> None:
-        result = classification.classify("subject", "body text")
-        assert 0.0 <= result.confidence <= 1.0
-
-
-# ---------------------------------------------------------------------------
-# Routing service unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestRoutingService:
-    def test_bug_routes_to_bugs(self) -> None:
-        assert routing.route("bug") == "#support-bugs"
-
-    def test_billing_routes_to_billing(self) -> None:
-        assert routing.route("billing") == "#support-billing"
-
-    def test_feature_request_routes_to_features(self) -> None:
-        assert routing.route("feature_request") == "#support-features"
-
-    def test_technical_question_routes_to_tech(self) -> None:
-        assert routing.route("technical_question") == "#support-tech"
-
-    def test_unknown_category_routes_to_default(self) -> None:
-        channel = routing.route("unknown_category")
-        assert channel == "#support-general"

@@ -1,12 +1,12 @@
 """
-Automation service.
+Orchestrator.
 
-Orchestrates the full ticket processing pipeline:
-  ingestion → classification → routing → audit → metrics
+Single entry point for the full ticket decision pipeline:
 
-This is the only module that coordinates across services. Route handlers
-call process_ticket() and receive a TicketResponse — they don't know how
-classification or routing work internally.
+  ingestion → classification → confidence scoring → routing → auto-resolution → audit
+
+Route handlers call process_ticket() and receive a PipelineResult.
+They don't know how any individual stage works.
 """
 
 import logging
@@ -14,38 +14,69 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.core.metrics import metrics
-from app.schemas.ticket import TicketRequest, TicketResponse
-from app.services import audit, classification, ingestion, routing
+from app.schemas.ticket import PipelineResult, TicketRequest
+from app.services import audit, auto_resolve, classification, confidence, ingestion, routing
 
 logger = logging.getLogger(__name__)
 
 
-def process_ticket(ticket: TicketRequest, db: Session) -> TicketResponse:
+def process_ticket(ticket: TicketRequest, db: Session) -> PipelineResult:
     """
-    Run a ticket through the full processing pipeline.
+    Run a ticket through the full decision pipeline.
+
+    Pipeline:
+      1. Ingest      — normalise raw input
+      2. Classify    — category + urgency + base confidence (via ai_client)
+      3. Score       — apply rule adjustments to confidence
+      4. Route       — decide queue based on confidence + urgency + category
+      5. Auto-resolve — attempt resolution for simple, high-confidence cases
+      6. Audit       — persist all decisions to the database
+      7. Metrics     — update in-memory counters
 
     Args:
         ticket: Validated inbound ticket.
         db: Database session for audit logging.
 
     Returns:
-        TicketResponse containing routing decision and classification.
+        PipelineResult containing all stage outputs.
     """
+    # 1. Ingest
     subject, body = ingestion.ingest(ticket)
-    classified = classification.classify(subject, body)
-    channel = routing.route(classified.category)
-    audit_entry = audit.log_ticket(classified, channel, db)
 
-    metrics.record_ticket(classified.category, channel)
+    # 2. Classify (base confidence)
+    raw = classification.classify(subject, body)
+
+    # 3. Score confidence (apply rule adjustments)
+    adjusted_confidence = confidence.score(subject, body, raw.confidence)
+    classified = raw.model_copy(update={"confidence": adjusted_confidence})
+
+    # 4. Route
+    routing_decision = routing.route(classified)
+
+    # 5. Auto-resolve
+    automation_result = auto_resolve.automate(classified, subject, body)
+
+    # 6. Audit
+    audit_entry = audit.log_ticket(ticket, classified, routing_decision, automation_result, db)
+
+    # 7. Metrics
+    metrics.record_ticket(classified.category, routing_decision.queue)
 
     logger.info(
-        "Ticket processing complete",
+        "Pipeline complete",
         extra={
             "ticket_id": audit_entry.id,
             "category": classified.category,
-            "routed_to": channel,
+            "urgency": classified.urgency,
             "confidence": classified.confidence,
+            "queue": routing_decision.queue,
+            "resolved": automation_result.resolved,
         },
     )
 
-    return TicketResponse(routed_to=channel, classification=classified)
+    return PipelineResult(
+        ticket_id=audit_entry.id,
+        classification=classified,
+        routing=routing_decision,
+        automation=automation_result,
+    )
