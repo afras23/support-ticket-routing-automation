@@ -1,17 +1,16 @@
 """
-Pydantic schemas for ticket request and response contracts.
+Pydantic schemas for ticket request, pipeline stages, and response contracts.
 
-These are the API-boundary types. The SQLAlchemy model (app/models/ticket.py)
-is kept separate — schemas are for validation and serialisation only.
+These are the API-boundary and inter-service types. The SQLAlchemy ORM model
+(app/models/ticket.py) is kept separate.
 """
 
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-TicketCategory = Literal["bug", "feature_request", "billing", "technical_question"]
+TicketCategory = Literal["billing", "technical", "general"]
 Urgency = Literal["low", "medium", "high"]
-Sentiment = Literal["negative", "neutral", "positive"]
 
 
 class TicketRequest(BaseModel):
@@ -22,19 +21,36 @@ class TicketRequest(BaseModel):
     customer_email: str = Field(..., description="Submitting customer's email address")
 
 
-class ClassifiedTicket(BaseModel):
-    """Ticket enriched with classification metadata."""
+class ClassificationResult(BaseModel):
+    """Output of the classification step (base confidence, before scoring)."""
 
     category: TicketCategory
     urgency: Urgency
-    sentiment: Sentiment
-    product_area: str
     confidence: float = Field(ge=0.0, le=1.0)
-    summary: str
 
 
-class TicketResponse(BaseModel):
-    """API response returned after a ticket is processed."""
+class RoutingDecision(BaseModel):
+    """Where to send the ticket and why."""
 
-    routed_to: str
-    classification: ClassifiedTicket
+    queue: str = Field(
+        description=(
+            "Target queue: escalation | manual_review | finance | support | general"
+        )
+    )
+    reason: str
+
+
+class AutomationResult(BaseModel):
+    """Outcome of the auto-resolution attempt."""
+
+    resolved: bool
+    reason: str
+
+
+class PipelineResult(BaseModel):
+    """Full result of processing a ticket through the pipeline."""
+
+    ticket_id: int
+    classification: ClassificationResult
+    routing: RoutingDecision
+    automation: AutomationResult
