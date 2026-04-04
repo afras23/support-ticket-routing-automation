@@ -4,6 +4,16 @@ Internal backend service for automated support ticket triage and routing.
 
 Receives inbound tickets via HTTP, classifies them by category and urgency, scores classification confidence, routes to the appropriate support queue, and attempts auto-resolution for simple cases. All decisions are persisted to an audit log.
 
+## Example
+
+POST /support-ticket
+
+{
+  "subject": "Cannot login",
+  "body": "Receiving 401 error",
+  "customer_email": "user@example.com"
+}
+
 ---
 
 ## Table of Contents
@@ -22,7 +32,7 @@ Receives inbound tickets via HTTP, classifies them by category and urgency, scor
 
 ## 1. System Overview
 
-This service sits between the customer-facing ticket intake (web form, email parser, or webhook) and the internal support queues. It processes each inbound ticket through a fixed five-stage pipeline and returns a structured decision object that downstream systems can act on.
+This service sits between the customer-facing ticket intake (web form, email parser, or webhook) and the internal support queues. It processes each inbound ticket through a fixed six-stage pipeline (ingestion through audit logging) and returns a structured decision object that downstream systems can act on.
 
 It does not replace the support team. It handles the mechanical work — reading tickets, deciding where they go, and resolving the ones that don't need a human — so that support agents spend their time on cases that actually require judgement.
 
@@ -68,13 +78,13 @@ Inbound ticket (HTTP POST)
         │
         ▼
 ┌─────────────────┐
-│   Ingestion     │  Normalise input (strip whitespace, validate fields)
+│   Ingestion     │  Normalise input (strip whitespace; schema validates earlier)
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
 │ Classification  │  Determine category + urgency + base confidence
-│  (ai_client)   │  Default: rule-based keyword matching
+│ (app.ai.client) │  Default: RuleBasedClassifier (keyword matching)
 └────────┬────────┘
          │
          ▼
@@ -108,11 +118,11 @@ Inbound ticket (HTTP POST)
 
 **Ingestion** (`app/services/ingestion.py`)
 
-Strips whitespace and validates that the ticket has a non-empty subject and body. No logic beyond normalisation.
+Strips surrounding whitespace on subject and body. Length and presence rules are enforced earlier by `TicketRequest` (Pydantic) before `process_ticket` runs; this stage only normalises text for classification.
 
 **Classification** (`app/services/classification.py`, `app/ai/client.py`)
 
-Calls an `AIClient` to produce a `ClassificationResult`: category, urgency, and a base confidence score. The default implementation (`RuleBasedClassifier`) uses keyword matching with confidence derived from match count. Any classifier that satisfies the `AIClient` protocol can be substituted — the rest of the pipeline does not change.
+Calls an `AIClient` to produce a `ClassificationResult`: category, urgency, and a base confidence score. The default implementation (`RuleBasedClassifier` in `app/ai/client.py`) uses keyword matching with confidence derived from match count. Any classifier that satisfies the `AIClient` protocol can be substituted — the rest of the pipeline does not change. Versioned LLM-oriented prompt templates live separately in `app/services/ai/prompts.py` for use when you wire in an external model; the default rule-based path does not import them.
 
 Categories: `billing`, `technical`, `general`
 Urgency levels: `low`, `medium`, `high`
@@ -142,7 +152,7 @@ If any condition fails, the ticket is not auto-resolved and continues to the ass
 
 **Audit logging** (`app/services/audit.py`)
 
-Writes a single row to the `tickets` table for every processed ticket. Stores the original input, classification result, routing decision, and automation outcome. This is the authoritative record of what the system decided and why.
+Owns the synchronous SQLAlchemy engine and session factory (`get_db()` for FastAPI dependencies). Writes a single row to the `tickets` table for every processed ticket. Stores the original input, classification result, routing decision, and automation outcome. This is the authoritative record of what the system decided and why.
 
 ---
 
@@ -253,7 +263,7 @@ All three conditions must be true. A failure at any gate stops resolution.
 | 2 | category == `general` | `resolved: false`, reason includes category |
 | 3 | text matches a known pattern | `resolved: false`, "No auto-resolve pattern matched" |
 
-Auto-resolvable patterns currently include: `password reset`, `forgot password`, `how to`, `how do i`, `what is`, `where can i`, `when does`, `getting started`.
+Auto-resolvable patterns are substring matches defined in `app/services/auto_resolve.py`, currently: `password reset`, `reset my password`, `forgot password`, `how to`, `how do i`, `where can i`, `what is`, `when does`, `getting started`.
 
 ### Base confidence from rule-based classifier
 
@@ -294,7 +304,7 @@ The service exposes three operational endpoints:
 
 - `GET /health` — liveness: is the process running?
 - `GET /health/ready` — readiness: can it serve traffic? (checks database connection, returns 503 if not)
-- `GET /metrics` — in-process counters for request count, category distribution, queue distribution
+- `GET /metrics` — in-process counters incremented once per completed ticket pipeline run: processed ticket count, classification distribution, routing (queue) distribution
 
 ---
 
@@ -351,7 +361,7 @@ cp .env.example .env
 uvicorn app.main:app --reload --port 8000
 ```
 
-The database file (`tickets.db`) is created automatically on first startup.
+With the default `DATABASE_URL`, the SQLite database file (`./tickets.db` relative to the process working directory) is created automatically when the first ticket is persisted.
 
 ### Local setup (Docker)
 
@@ -359,7 +369,7 @@ The database file (`tickets.db`) is created automatically on first startup.
 docker-compose up --build
 ```
 
-The SQLite database is mounted to `./data/tickets.db` via the volume in `docker-compose.yml`.
+Compose mounts host `./data` to `/app/data` in the container (`docker-compose.yml`). Set `DATABASE_URL=sqlite:///./data/tickets.db` in `.env` (see `.env.example`) so the app writes the database inside that volume.
 
 ### Sending a ticket
 
@@ -407,7 +417,7 @@ curl http://localhost:8000/health/ready
 curl http://localhost:8000/metrics
 ```
 
-Metrics response:
+Metrics response (shape from `app/core/metrics.py`; `request_count` increments once per successful run of `process_ticket`, not for unrelated HTTP calls):
 
 ```json
 {
@@ -431,81 +441,75 @@ Metrics response:
 
 ```bash
 pip install -r requirements-dev.txt
-DATABASE_URL="sqlite:///:memory:" pytest tests/ -v
+make test
 ```
+
+`tests/conftest.py` sets `DATABASE_URL` to `sqlite:///:memory:` before importing the application so the suite uses an isolated in-memory database and a URL compatible with the synchronous SQLAlchemy engine in `app/services/audit.py` (overrides any async-style URL such as `sqlite+aiosqlite`).
+
+For the same checks as CI: `make lint`, `make typecheck`, and `make test` (see `Makefile`).
 
 ---
 
 ## 9. Project Structure
 
 ```
-app/
-├── main.py                 FastAPI application. Registers routers and
-│                           runs setup_logging() on startup. No logic.
+.
+├── Makefile                Local and CI entrypoints: lint, typecheck, test.
+├── Dockerfile              Multi-stage image; non-root user; HEALTHCHECK on /health.
+├── docker-compose.yml      Runs the API service with optional SQLite volume mount.
+├── requirements.txt        Runtime Python dependencies.
+├── requirements-dev.txt    Lint, type check, and test dependencies.
+├── .env.example            Documented environment variables (copy to `.env`).
 │
-├── config.py               Pydantic Settings. All environment variables
-│                           are declared and validated here. Nothing else
-│                           reads from os.environ directly.
-│
-├── ai/
-│   └── client.py           AIClient protocol (the interface any classifier
-│                           must satisfy) and RuleBasedClassifier (the default
-│                           deterministic implementation). Swap here to use an LLM.
-│
-├── core/
-│   ├── logging.py          Structured log formatter. Produces pipe-separated
-│   │                       key=value lines. Call setup_logging() once at startup.
-│   └── metrics.py          In-process AppMetrics singleton. Counts requests,
-│                           category distribution, and queue distribution.
-│                           Not durable — resets on restart.
-│
-├── models/
-│   └── ticket.py           SQLAlchemy ORM model for the tickets table.
-│                           Defines schema only. All DB access goes through
-│                           services/audit.py.
-│
-├── schemas/
-│   └── ticket.py           Pydantic types used across service boundaries:
-│                           TicketRequest, ClassificationResult, RoutingDecision,
-│                           AutomationResult, PipelineResult.
-│
-├── services/
-│   ├── ingestion.py        Normalises raw input (strip, validate). Returns
-│   │                       (subject, body) tuple ready for classification.
+├── app/
+│   ├── main.py             FastAPI application. Calls setup_logging(), then
+│   │                       registers routers from app.routes. No pipeline logic.
 │   │
-│   ├── classification.py   Calls ai_client.classify(). Thin wrapper —
-│   │                       all classification logic lives in app/ai/client.py.
+│   ├── config.py           Pydantic Settings (`BaseSettings`). Central place for
+│   │                       environment-driven configuration.
 │   │
-│   ├── confidence.py       Applies rule-based adjustments to base confidence.
-│   │                       Short body penalty and signal keyword boost.
+│   ├── ai/
+│   │   └── client.py       AIClient protocol and RuleBasedClassifier (default).
+│   │                       Swap implementations via classification.classify(..., ai_client=).
 │   │
-│   ├── routing.py          Maps ClassificationResult to a RoutingDecision.
-│   │                       Priority: confidence → urgency → category.
+│   ├── core/
+│   │   ├── logging.py      StructuredFormatter (pipe-separated key=value) and
+│   │   │                   setup_logging().
+│   │   └── metrics.py      AppMetrics singleton; record_ticket() from automation.
 │   │
-│   ├── auto_resolve.py     Evaluates three gates for auto-resolution.
-│   │                       Returns AutomationResult with resolved flag and reason.
+│   ├── models/
+│   │   └── ticket.py       SQLAlchemy ORM model `TicketLog` → `tickets` table.
 │   │
-│   ├── automation.py       Pipeline orchestrator. Calls each service in order
-│   │                       and assembles the PipelineResult. The only file that
-│   │                       coordinates across all stages.
+│   ├── schemas/
+│   │   └── ticket.py       Pydantic models: TicketRequest, ClassificationResult,
+│   │                       RoutingDecision, AutomationResult, PipelineResult,
+│   │                       TicketResponse (OpenAPI response for POST /support-ticket/).
 │   │
-│   └── audit.py            Owns the SQLAlchemy engine and session factory.
-│                           Provides get_db() for dependency injection and
-│                           log_ticket() for writing audit rows.
+│   ├── services/
+│   │   ├── ingestion.py    Normalise subject/body before classification.
+│   │   ├── classification.py  Thin wrapper: calls AIClient.classify().
+│   │   ├── confidence.py   Rule-based adjustments to base confidence.
+│   │   ├── routing.py      ClassificationResult → RoutingDecision (thresholds here).
+│   │   ├── auto_resolve.py Three-gate auto-resolution → AutomationResult.
+│   │   ├── automation.py   process_ticket(): full pipeline + metrics + audit.
+│   │   ├── audit.py        Engine, session factory, get_db(), log_ticket().
+│   │   └── ai/
+│   │       └── prompts.py  Versioned PromptTemplate definitions for LLM-backed
+│   │                       classifiers (optional; not used by RuleBasedClassifier).
+│   │
+│   └── routes/
+│       ├── health.py       GET /health, /health/ready, /metrics
+│       └── tickets.py      POST /support-ticket/ → app.services.automation.process_ticket
 │
-└── routes/
-    ├── health.py           GET /health, GET /health/ready, GET /metrics
-    └── tickets.py          POST /support-ticket/ — delegates to process_ticket()
-
-tests/
-├── conftest.py             Sets DATABASE_URL to in-memory SQLite before import.
-│                           Provides shared TestClient fixture.
-├── test_health.py          Health and metrics endpoint tests.
-├── test_ticket_flow.py     API endpoint tests covering each routing outcome
-│                           and input validation rejection cases.
-└── test_pipeline.py        Unit tests for each service stage in isolation:
-                            classification, confidence scoring, routing,
-                            auto-resolve, and edge cases.
+├── tests/
+│   ├── conftest.py         Forces sync sqlite:///:memory: before app import;
+│   │                       session-scoped TestClient fixture.
+│   ├── test_health.py      Health, readiness, and metrics endpoints.
+│   ├── test_ticket_flow.py POST /support-ticket/ flows and validation errors.
+│   └── test_pipeline.py    Unit tests per pipeline stage.
+│
+└── .github/workflows/
+    └── ci.yml              Install requirements, then `make lint`, `make typecheck`, `make test`.
 ```
 
 ### Configuration reference
@@ -517,9 +521,9 @@ All values can be overridden via environment variable or `.env` file.
 | `APP_ENV` | `development` | Environment name, included in logs |
 | `DATABASE_URL` | `sqlite:///./tickets.db` | SQLAlchemy connection string |
 | `LOG_LEVEL` | `INFO` | Python logging level |
-| `CONFIDENCE_DEFAULT` | `0.82` | Fallback base confidence (unused when classifier computes its own) |
-| `CONFIDENCE_THRESHOLD_AUTO_ROUTE` | `0.70` | Reserved for future use |
-| `DEFAULT_CHANNEL` | `#support-general` | Fallback routing destination |
+| `CONFIDENCE_DEFAULT` | `0.82` | Declared in settings; not read by the current rule-based classifier |
+| `CONFIDENCE_THRESHOLD_AUTO_ROUTE` | `0.70` | Declared in settings; not referenced by routing or auto-resolve logic today |
+| `DEFAULT_CHANNEL` | `#support-general` | Declared in settings; not referenced by queue rules in code today |
 
 ### Extending the classifier
 
@@ -532,11 +536,11 @@ class ClaudeClassifier:
         # Call your LLM API here
         ...
 
-# 2. Pass it to the classification service at the call site in automation.py
+# 2. Pass it where classification runs (e.g. in process_ticket in automation.py)
 raw = classification.classify(subject, body, ai_client=ClaudeClassifier())
 ```
 
-No other file needs to change.
+Downstream stages (confidence, routing, auto-resolve, audit) stay unchanged as long as the replacement still returns a valid `ClassificationResult`.
 
 ---
 
@@ -546,9 +550,12 @@ No other file needs to change.
 - `fastapi` — HTTP framework and request routing
 - `uvicorn` — ASGI server
 - `pydantic` + `pydantic-settings` — schema validation and environment config
-- `sqlalchemy` — ORM and database access
+- `sqlalchemy` — ORM and synchronous SQLite access (see `app/services/audit.py`)
 
 **Development** (`requirements-dev.txt`)
 - `pytest` — test runner
-- `httpx` — async HTTP client used by TestClient
+- `pytest-asyncio` — pytest plugin for async tests (listed in dev dependencies for CI)
+- `httpx` — HTTP client used by Starlette/FastAPI `TestClient`
 - `pytest-cov` — coverage reporting
+- `ruff` — linter and formatter (`make lint`)
+- `mypy` — static type checker (`make typecheck`)
