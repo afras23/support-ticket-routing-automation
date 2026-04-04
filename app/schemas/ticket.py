@@ -54,3 +54,7 @@ class PipelineResult(BaseModel):
     classification: ClassificationResult
     routing: RoutingDecision
     automation: AutomationResult
+
+
+class TicketResponse(PipelineResult):
+    """API response body for POST /support-ticket/."""

@@ -15,13 +15,32 @@ class StructuredFormatter(logging.Formatter):
     """Format log records as pipe-separated key=value pairs."""
 
     # Fields that are internal to LogRecord — excluded from structured output.
-    _SKIP = frozenset({
-        "name", "msg", "args", "created", "filename", "funcName",
-        "levelname", "levelno", "lineno", "message", "module",
-        "msecs", "pathname", "process", "processName", "relativeCreated",
-        "stack_info", "thread", "threadName", "exc_info", "exc_text",
-        "taskName",
-    })
+    _SKIP = frozenset(
+        {
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "message",
+            "module",
+            "msecs",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "stack_info",
+            "thread",
+            "threadName",
+            "exc_info",
+            "exc_text",
+            "taskName",
+        }
+    )
 
     def format(self, record: logging.LogRecord) -> str:
         fields: dict[str, Any] = {

@@ -7,8 +7,9 @@ imported so tests don't read or write the development tickets.db file.
 
 import os
 
-# Must be set before any app module is imported.
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+# Must be set before any app module is imported. The audit layer uses a sync
+# SQLAlchemy engine; an async URL (e.g. sqlite+aiosqlite) breaks at import time.
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

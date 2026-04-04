@@ -24,7 +24,9 @@ class PromptTemplate:
 CLASSIFICATION_V1 = PromptTemplate(
     name="classification_v1",
     version="1.0",
-    system=("You are a support ticket classifier. Return ONLY valid JSON. Do not include commentary."),
+    system=(
+        "You are a support ticket classifier. Return ONLY valid JSON. Do not include commentary."
+    ),
     user_template=(
         "Classify this support ticket.\n\n"
         "Return JSON with keys: category, priority.\n"
@@ -77,4 +79,8 @@ def get_prompt(name: str, *, subject: str, body: str) -> tuple[str, str, str]:
         Tuple of (system_prompt, user_prompt, prompt_version).
     """
     template = PROMPTS[name]
-    return (template.system, template.user_template.format(subject=subject, body=body), template.version)
+    return (
+        template.system,
+        template.user_template.format(subject=subject, body=body),
+        template.version,
+    )

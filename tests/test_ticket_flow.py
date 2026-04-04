@@ -118,13 +118,21 @@ class TestTicketEndpoint:
     def test_empty_subject_returns_422(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
-            json={"subject": "", "body": "Test body", "customer_email": "user@example.com"},
+            json={
+                "subject": "",
+                "body": "Test body",
+                "customer_email": "user@example.com",
+            },
         )
         assert response.status_code == 422
 
     def test_empty_body_returns_422(self, client: TestClient) -> None:
         response = client.post(
             "/support-ticket/",
-            json={"subject": "Test subject", "body": "", "customer_email": "user@example.com"},
+            json={
+                "subject": "Test subject",
+                "body": "",
+                "customer_email": "user@example.com",
+            },
         )
         assert response.status_code == 422

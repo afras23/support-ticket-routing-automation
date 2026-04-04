@@ -21,10 +21,22 @@ _SHORT_BODY_PENALTY = 0.15
 
 # Keywords that signal strong domain intent — presence boosts certainty.
 _SIGNAL_KEYWORDS = [
-    "urgent", "asap", "crash", "down", "outage",
-    "payment", "invoice", "refund", "charge",
-    "password", "reset", "cannot login", "can't login",
-    "error", "exception", "broken",
+    "urgent",
+    "asap",
+    "crash",
+    "down",
+    "outage",
+    "payment",
+    "invoice",
+    "refund",
+    "charge",
+    "password",
+    "reset",
+    "cannot login",
+    "can't login",
+    "error",
+    "exception",
+    "broken",
 ]
 _KEYWORD_BOOST_PER_MATCH = 0.08
 _MAX_KEYWORD_BOOST = 0.20

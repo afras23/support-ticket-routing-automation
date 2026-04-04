@@ -10,12 +10,20 @@ They don't know how any individual stage works.
 """
 
 import logging
+from typing import cast
 
 from sqlalchemy.orm import Session
 
 from app.core.metrics import metrics
 from app.schemas.ticket import PipelineResult, TicketRequest
-from app.services import audit, auto_resolve, classification, confidence, ingestion, routing
+from app.services import (
+    audit,
+    auto_resolve,
+    classification,
+    confidence,
+    ingestion,
+    routing,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +65,9 @@ def process_ticket(ticket: TicketRequest, db: Session) -> PipelineResult:
     automation_result = auto_resolve.automate(classified, subject, body)
 
     # 6. Audit
-    audit_entry = audit.log_ticket(ticket, classified, routing_decision, automation_result, db)
+    audit_entry = audit.log_ticket(
+        ticket, classified, routing_decision, automation_result, db
+    )
 
     # 7. Metrics
     metrics.record_ticket(classified.category, routing_decision.queue)
@@ -75,7 +85,7 @@ def process_ticket(ticket: TicketRequest, db: Session) -> PipelineResult:
     )
 
     return PipelineResult(
-        ticket_id=audit_entry.id,
+        ticket_id=cast(int, audit_entry.id),
         classification=classified,
         routing=routing_decision,
         automation=automation_result,

@@ -6,8 +6,6 @@ pinpointed without running the full HTTP stack. Also covers the
 mock AI client injection pattern.
 """
 
-import pytest
-
 from app.ai.client import AIClient, RuleBasedClassifier
 from app.schemas.ticket import ClassificationResult
 from app.services import auto_resolve, classification, confidence, routing
@@ -22,15 +20,21 @@ from app.services.auto_resolve import CONFIDENCE_AUTO_RESOLVE_THRESHOLD
 
 class TestClassification:
     def test_billing_keywords_detected(self) -> None:
-        result = classification.classify("billing question", "I need help with my invoice.")
+        result = classification.classify(
+            "billing question", "I need help with my invoice."
+        )
         assert result.category == "billing"
 
     def test_technical_keywords_detected(self) -> None:
-        result = classification.classify("bug report", "The app crashes with an error on login.")
+        result = classification.classify(
+            "bug report", "The app crashes with an error on login."
+        )
         assert result.category == "technical"
 
     def test_general_is_fallback(self) -> None:
-        result = classification.classify("hello", "I was just wondering about your service.")
+        result = classification.classify(
+            "hello", "I was just wondering about your service."
+        )
         assert result.category == "general"
 
     def test_high_urgency_detected(self) -> None:
@@ -42,7 +46,9 @@ class TestClassification:
         assert result.urgency == "low"
 
     def test_medium_urgency_is_default(self) -> None:
-        result = classification.classify("help needed", "Can you please help me with this issue?")
+        result = classification.classify(
+            "help needed", "Can you please help me with this issue?"
+        )
         assert result.urgency == "medium"
 
     def test_confidence_within_valid_range(self) -> None:
@@ -62,7 +68,9 @@ class TestClassification:
                     category="billing", urgency="low", confidence=0.99
                 )
 
-        result = classification.classify("anything", "anything", ai_client=FixedClassifier())
+        result = classification.classify(
+            "anything", "anything", ai_client=FixedClassifier()
+        )
         assert result.category == "billing"
         assert result.confidence == 0.99
 
@@ -108,7 +116,11 @@ class TestConfidenceScoring:
         assert result > base
 
     def test_score_clamped_to_maximum_of_1(self) -> None:
-        result = confidence.score("crash error payment urgent", "crash error down urgent asap critical outage payment invoice broken", 0.99)
+        result = confidence.score(
+            "crash error payment urgent",
+            "crash error down urgent asap critical outage payment invoice broken",
+            0.99,
+        )
         assert result <= 1.0
 
     def test_score_clamped_to_minimum_of_0(self) -> None:
@@ -142,7 +154,7 @@ class TestRouting:
     ) -> ClassificationResult:
         return ClassificationResult(
             category=category,  # type: ignore[arg-type]
-            urgency=urgency,    # type: ignore[arg-type]
+            urgency=urgency,  # type: ignore[arg-type]
             confidence=confidence_val,
         )
 
@@ -208,17 +220,23 @@ class TestAutoResolve:
 
     def test_password_reset_resolves(self) -> None:
         clf = self._clf(confidence_val=0.90)
-        result = auto_resolve.automate(clf, "account issue", "I need a password reset please.")
+        result = auto_resolve.automate(
+            clf, "account issue", "I need a password reset please."
+        )
         assert result.resolved is True
 
     def test_how_to_query_resolves(self) -> None:
         clf = self._clf(confidence_val=0.90)
-        result = auto_resolve.automate(clf, "help", "How to export my data from the dashboard?")
+        result = auto_resolve.automate(
+            clf, "help", "How to export my data from the dashboard?"
+        )
         assert result.resolved is True
 
     def test_getting_started_resolves(self) -> None:
         clf = self._clf(confidence_val=0.90)
-        result = auto_resolve.automate(clf, "new user", "I need help getting started with the product.")
+        result = auto_resolve.automate(
+            clf, "new user", "I need help getting started with the product."
+        )
         assert result.resolved is True
 
     def test_low_confidence_not_resolved(self) -> None:
@@ -229,13 +247,17 @@ class TestAutoResolve:
 
     def test_billing_category_not_resolved(self) -> None:
         clf = self._clf(category="billing", confidence_val=0.95)
-        result = auto_resolve.automate(clf, "refund", "How to get a refund for my invoice?")
+        result = auto_resolve.automate(
+            clf, "refund", "How to get a refund for my invoice?"
+        )
         assert result.resolved is False
         assert "billing" in result.reason
 
     def test_technical_category_not_resolved(self) -> None:
         clf = self._clf(category="technical", confidence_val=0.95)
-        result = auto_resolve.automate(clf, "bug", "How do I fix this connection error?")
+        result = auto_resolve.automate(
+            clf, "bug", "How do I fix this connection error?"
+        )
         assert result.resolved is False
         assert "technical" in result.reason
 
@@ -290,6 +312,10 @@ class TestEdgeCases:
     def test_rulebasedclassifier_is_deterministic(self) -> None:
         """Same input always produces the same output."""
         classifier = RuleBasedClassifier()
-        r1 = classifier.classify("payment error", "My invoice payment failed with an error.")
-        r2 = classifier.classify("payment error", "My invoice payment failed with an error.")
+        r1 = classifier.classify(
+            "payment error", "My invoice payment failed with an error."
+        )
+        r2 = classifier.classify(
+            "payment error", "My invoice payment failed with an error."
+        )
         assert r1 == r2

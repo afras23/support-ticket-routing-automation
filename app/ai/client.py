@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 # Protocol — the contract every classifier must satisfy
 # ---------------------------------------------------------------------------
 
+
 @runtime_checkable
 class AIClient(Protocol):
     """Interface for ticket classifiers.  Accepts raw text, returns structured result."""
 
-    def classify(self, subject: str, body: str) -> ClassificationResult:
-        ...
+    def classify(self, subject: str, body: str) -> ClassificationResult: ...
 
 
 # ---------------------------------------------------------------------------
@@ -39,25 +39,62 @@ class AIClient(Protocol):
 
 _CATEGORY_KEYWORDS: dict[TicketCategory, list[str]] = {
     "billing": [
-        "invoice", "billing", "payment", "charge", "refund",
-        "subscription", "price", "cost", "receipt", "overcharged", "fee",
+        "invoice",
+        "billing",
+        "payment",
+        "charge",
+        "refund",
+        "subscription",
+        "price",
+        "cost",
+        "receipt",
+        "overcharged",
+        "fee",
     ],
     "technical": [
-        "crash", "error", "bug", "broken", "failure", "exception",
-        "not working", "login", "password", "access", "connect",
-        "install", "configure", "sso", "integration", "api", "outage",
+        "crash",
+        "error",
+        "bug",
+        "broken",
+        "failure",
+        "exception",
+        "not working",
+        "login",
+        "password",
+        "access",
+        "connect",
+        "install",
+        "configure",
+        "sso",
+        "integration",
+        "api",
+        "outage",
     ],
     "general": [],  # explicit fallback
 }
 
 _HIGH_URGENCY_KEYWORDS = [
-    "urgent", "asap", "immediately", "critical", "emergency",
-    "outage", "down", "cannot access", "can't access",
+    "urgent",
+    "asap",
+    "immediately",
+    "critical",
+    "emergency",
+    "outage",
+    "down",
+    "cannot access",
+    "can't access",
 ]
 
 _LOW_URGENCY_KEYWORDS = [
-    "question", "wondering", "curious", "when will", "suggestion",
-    "feedback", "how to", "information", "general inquiry",
+    "question",
+    "wondering",
+    "curious",
+    "when will",
+    "suggestion",
+    "feedback",
+    "how to",
+    "information",
+    "general inquiry",
 ]
 
 
@@ -99,6 +136,7 @@ def _base_confidence(category: TicketCategory, text: str) -> float:
 # ---------------------------------------------------------------------------
 # Default implementation — no external dependencies
 # ---------------------------------------------------------------------------
+
 
 class RuleBasedClassifier:
     """

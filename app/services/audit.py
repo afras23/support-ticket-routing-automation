@@ -17,7 +17,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.config import settings
 from app.models.ticket import Base, TicketLog
-from app.schemas.ticket import AutomationResult, ClassificationResult, RoutingDecision, TicketRequest
+from app.schemas.ticket import (
+    AutomationResult,
+    ClassificationResult,
+    RoutingDecision,
+    TicketRequest,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ import logging
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.schemas.ticket import TicketRequest, TicketResponse
+from app.schemas.ticket import PipelineResult, TicketRequest, TicketResponse
 from app.services.audit import get_db
 from app.services.automation import process_ticket
 
@@ -23,7 +23,7 @@ router = APIRouter(tags=["tickets"])
 def receive_ticket(
     ticket: TicketRequest,
     db: Session = Depends(get_db),
-) -> TicketResponse:
+) -> PipelineResult:
     """
     Process an inbound support ticket.
 
